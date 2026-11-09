@@ -22,6 +22,8 @@ Person :: struct {
     country : Country,
     age : int,
 
+    rememberedA : []u8,
+    rememberedB : []u8,
     rememberedUid : u64,
     rememberedViolation : bool,
 
@@ -108,12 +110,12 @@ main :: proc () {
     people : []Person = {
         Person{ id = 0, fullname = "Vitalya Gryb", country = .Ukraine, age = 23 },
         Person{ id = 1, fullname = "Svitlana Zhizha", country = .Ukraine, age = 27 },
-        // Person{ id = 2, fullname = "Zheka Zrada", country = .Ukraine, age = 19 },
-        // Person{ id = 3, fullname = "Grzegorz Brzeczyszczykiewicz", country = .Ukraine, age = 153 },
-        // Person{ id = 4, fullname = "little boy", country = .Ukraine, age = 4 },
-        // Person{ id = 5, fullname = "Yaroslav Aboba", country = .Ukraine, age = 34 },
-        // Person{ id = 6, fullname = "Vova Ugabuga", country = .Ukraine, age = 7182 },
-        // Person{ id = 7, fullname = "Mariya Kavun", country = .Ukraine, age = 26 },
+        Person{ id = 2, fullname = "Zheka Zrada", country = .Ukraine, age = 19 },
+        Person{ id = 3, fullname = "Grzegorz Brzeczyszczykiewicz", country = .Ukraine, age = 153 },
+        Person{ id = 4, fullname = "little boy", country = .Ukraine, age = 4 },
+        Person{ id = 5, fullname = "Yaroslav Aboba", country = .Ukraine, age = 34 },
+        Person{ id = 6, fullname = "Vova Ugabuga", country = .Ukraine, age = 7182 },
+        Person{ id = 7, fullname = "Mariya Kavun", country = .Ukraine, age = 26 },
     }
 
 
@@ -274,11 +276,35 @@ main :: proc () {
             mul_b *= cast(u64)x.b
         }
 
+        // violation: bad math
+        if rand.float32() < 0.1 {
+            mul_b += 5
+            fmt.printfln("\tVIOLATION: Messing up math")
+            p.rememberedViolation = true
+        }
+
         multipliers : []u64 = { mul_a, mul_b }
         
         fmt.printfln("\tGenerated multipliers: %v * %v == %v", mul_a, mul_b, mul_a * mul_b)
 
         voteId := rand.uint64()
+
+        fmt.printfln("\tGenerated ID: %v", voteId)
+
+
+        // violation: impersionation and thus invalid signature
+        impersonating := false
+        another := rand.choice(ec.voters[:])
+        if rand.float32() < 0.1 {
+            if another.person_id != p.id {
+                fmt.printfln("\tVIOLATION: Decided to impersonate %v", another.fullname)
+                p.rememberedViolation = true
+                impersonating = true
+            }
+        }
+
+        p.rememberedUid = voteId
+
         for &x, i in soa_zip(mec = mecs[:], mul = multipliers) {
             payload := BallotPayload{ candidate_id = x.mul }
             epayload, result := rsa.encrypt_value(&EC_PUBLIC_KEY, payload)
@@ -286,18 +312,34 @@ main :: proc () {
                 fmt.printfln("\tFATAL: Encryption failed")
             }
 
+            if i == 0 {
+                p.rememberedA = epayload
+            }
+            else {
+                p.rememberedB = epayload
+            }
+
             ballot := Ballot{
                 payload = epayload,
                 id = voteId,
             }
 
-            p.rememberedUid = ballot.id
+            // violation: messing up IDs
+            if rand.float32() < 0.1 {
+                fmt.printfln("\tVIOLATION: Messing up ID")
+                ballot.id = rand.uint64()
+                p.rememberedViolation = true
+            }
 
             signedBallot := SignedBallot{
                 ballot = ballot,
 
                 person_id = p.id,
                 signature = rsa.sign_value(&p.key_prv, ballot),
+            }
+
+            if impersonating {
+                signedBallot.person_id = another.person_id
             }
 
             append(&x.mec.ballots, signedBallot)
@@ -350,6 +392,14 @@ main :: proc () {
             if bf {
                 fmt.printfln("\tDISMISSED: Duplicate ID")
                 continue;
+            }
+
+
+            // violation: replacing ballot
+            if rand.float32() < 0.1 {
+                value : u64 = rand.uint64()
+                sb.ballot.payload, _ = rsa.encrypt_value(&EC_PUBLIC_KEY, BallotPayload{ value })
+                fmt.printfln("\tVIOLATION: Changed multiplier because im evil")
             }
 
 
@@ -441,16 +491,24 @@ main :: proc () {
 
     for &p in people {
         context.user_ptr = &p.rememberedUid
-        bi, bf := slice.linear_search_proc(publishedBallots[:], proc (b : PublicizedBallot) -> bool { return (b.id == (cast(^u64)context.user_ptr)^) })
+        _, bf := slice.linear_search_proc(publishedBallots[:], proc (b : PublicizedBallot) -> bool { return (b.id == (cast(^u64)context.user_ptr)^) })
 
-        if !bf {
-            fmt.printfln("%v failed to verify their vote! Remembered ID: %v", p.fullname, p.rememberedUid)
-            if p.rememberedViolation {
-                fmt.printfln("\t(keep in mind they violated voting process)")
-            }
-        }
-        else {
-            fmt.printfln("%v verified their vote! Remembered ID: %v", p.fullname, p.rememberedUid)
+        context.user_ptr = &p.rememberedUid
+        pa, paf := slice.linear_search_proc(mecs[0].publicBallots[:], proc (b : Ballot) -> bool { return (b.id == (cast(^u64)context.user_ptr)^) })
+        paf = paf && slice.equal(mecs[0].publicBallots[pa].payload, p.rememberedA)
+
+        context.user_ptr = &p.rememberedUid
+        pb, pbf := slice.linear_search_proc(mecs[1].publicBallots[:], proc (b : Ballot) -> bool { return (b.id == (cast(^u64)context.user_ptr)^) })
+        pbf = pbf && slice.equal(mecs[1].publicBallots[pb].payload, p.rememberedB)
+
+        fmt.printfln("%v verification status:\n\tA - %v, B - %v, FINAL - %v",
+            p.fullname,
+            paf ? "O" : "X",
+            pbf ? "O" : "X",
+            bf  ? "O" : "X")
+
+        if (!bf || !paf || !pbf) && p.rememberedViolation {
+            fmt.printfln("\t(keep in mind they violated voting process)")
         }
     }
 }
