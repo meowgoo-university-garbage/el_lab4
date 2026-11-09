@@ -22,6 +22,18 @@ Key_Private :: struct {
     d : big.Int,
 }
 
+int_from_bytes :: proc (b : []u8) -> (i : big.Int) {
+    big.int_from_bytes_little(&i, b)
+    return
+}
+
+bytes_from_int :: proc (i : ^big.Int) -> (b : []u8) {
+    size, _ := big.int_to_bytes_size(i)
+    b = make([]u8, size)
+    big.int_to_bytes_little(i, b)
+    return
+}
+
 keygen :: proc () -> (key_prv : Key_Private, key_pub : Key_Public) {
     p, q, p1, q1, ln : big.Int
     defer big.destroy(&p, &q, &p1, &q1, &ln)
@@ -55,9 +67,7 @@ internal_powmod :: proc (input : []u8, pow : ^big.Int, mod : ^big.Int) -> (resul
 
     big.internal_powmod(&result_int, &input_int, pow, mod)
 
-    size, _ := big.int_to_bytes_size(&result_int)
-    result = make([]u8, size)
-    big.int_to_bytes_little(&result_int, result)
+    result = bytes_from_int(&result_int)
 
     return
 }
@@ -68,8 +78,8 @@ encrypt :: proc (key : ^Key_Public, data : []u8) -> (cipher : []u8, ok : bool) {
     mdata : [dynamic]u8
     defer delete(mdata)
 
-    append(&mdata, PAD)
-    append(&mdata, cast(u8)len(data))
+    // append(&mdata, PAD)
+    // append(&mdata, cast(u8)len(data))
     append(&mdata, ..data)
 
     return internal_powmod(mdata[:], &key.e, &key.n), true
@@ -77,14 +87,15 @@ encrypt :: proc (key : ^Key_Public, data : []u8) -> (cipher : []u8, ok : bool) {
 
 decrypt :: proc (key : ^Key_Private, cipher : []u8) -> (data : []u8, ok : bool = true) {
     mdata := internal_powmod(cipher, &key.d, &key.n)
-    defer delete(mdata)
+    // defer delete(mdata)
 
-    (len(mdata) >= 2)       or_return
-    (mdata[0] == PAD)       or_return
-    (mdata[1] < MAX_LEN)    or_return
+    // (len(mdata) >= 2)       or_return
+    // (mdata[0] == PAD)       or_return
+    // (mdata[1] < MAX_LEN)    or_return
 
-    data = make([]u8, mdata[1])
-    mem.copy(raw_data(data), raw_data(mdata[2:]), len(mdata) - 2)
+    // data = make([]u8, mdata[1])
+    // mem.copy(raw_data(data), raw_data(mdata[2:]), len(mdata) - 2)
+    data = mdata
 
     return
 }
@@ -99,7 +110,7 @@ decrypt_value :: proc (key : ^Key_Private, cipher : []u8, $ty : typeid) -> (valu
     data := decrypt(key, cipher) or_return
     defer delete(data)
 
-    (len(data) == size_of(ty)) or_return
+    // (len(data) == size_of(ty)) or_return
 
     value = (cast(^ty)raw_data(data))^
     return
@@ -159,9 +170,7 @@ blindMask :: proc (key : ^Key_Public, r : ^big.Int, data : []u8) -> (masked : []
     big.int_from_bytes_little(&data_int, data)
     big.internal_mulmod(&masked_int, &data_int, &re, &key.n)
 
-    size, _ := big.int_to_bytes_size(&masked_int)
-    masked = make([]u8, size)
-    big.int_to_bytes_little(&masked_int, masked)
+    masked = bytes_from_int(&masked_int)
 
     return
 }
@@ -173,9 +182,7 @@ blindUnmask :: proc (key : ^Key_Public, r1 : ^big.Int, maskedSignature : []u8) -
     big.int_from_bytes_little(&masked_int, maskedSignature)
     big.internal_mulmod(&signature_int, &masked_int, r1, &key.n)
 
-    size, _ := big.int_to_bytes_size(&signature_int)
-    signature = make([]u8, size)
-    big.int_to_bytes_little(&signature_int, signature)
+    signature = bytes_from_int(&signature_int)
 
     return
 }
